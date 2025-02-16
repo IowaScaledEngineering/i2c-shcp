@@ -40,12 +40,11 @@ LICENSE:
 #define MIN(a,b) ((a)<(b)?(a):(b))
 #define MAX(a,b) ((a)>(b)?(a):(b))
 
-volatile uint8_t signalHeadOptions = 0;
 volatile uint32_t millis = 0;
 
 #define MAX_SIGNAL_HEADS 8
-
 SignalState_t signal[MAX_SIGNAL_HEADS];
+volatile uint8_t signalHeadOptions[MAX_SIGNAL_HEADS];
 
 #define I2C_REGISTER_MAP_SIZE  24
 volatile uint8_t i2c_registerMap[I2C_REGISTER_MAP_SIZE];
@@ -68,6 +67,18 @@ const uint8_t i2c_registerMapSize= I2C_REGISTER_MAP_SIZE;
 #define SIGNAL_HEAD_5_DEF   &PORTC, _BV(PC1), &PORTC, _BV(PC2), &PORTC, _BV(PC3)
 #define SIGNAL_HEAD_6_DEF   &PORTC, _BV(PC7), &PORTD, _BV(PD0), &PORTD, _BV(PD1)
 #define SIGNAL_HEAD_7_DEF   &PORTA, _BV(PA1), &PORTA, _BV(PA2), &PORTC, _BV(PA3)
+
+#define SENSE_COMMON_ANODE 0x01
+
+#define OPTION_COMMON_CATHODE  0x80
+#define OPTION_COMMON_ANODE    0x40
+#define OPTION_CA_CC_SENSE     0x00
+
+#define OPTION_SIGNAL_THREE_LIGHT 0x00
+#define OPTION_SIGNAL_SEARCHLIGHT 0x01
+
+#define I2CREG_ASPECTS_BASE   0
+#define I2CREG_OPTIONS_BASE   8
 
 
 uint32_t getMillis()
@@ -94,14 +105,14 @@ ISR(TIMER0_COMPA_vect)
 	
 	// First thing, output the signals so that the PWM doesn't get too much jitter
 
-	signalHeadISR_OutputPWM(&signal[0], signalHeadOptions, pwmPhase, SIGNAL_HEAD_0_DEF);
-	signalHeadISR_OutputPWM(&signal[1], signalHeadOptions, pwmPhase, SIGNAL_HEAD_1_DEF);
-	signalHeadISR_OutputPWM(&signal[2], signalHeadOptions, pwmPhase, SIGNAL_HEAD_2_DEF);
-	signalHeadISR_OutputPWM(&signal[3], signalHeadOptions, pwmPhase, SIGNAL_HEAD_3_DEF);
-	signalHeadISR_OutputPWM(&signal[4], signalHeadOptions, pwmPhase, SIGNAL_HEAD_4_DEF);
-	signalHeadISR_OutputPWM(&signal[5], signalHeadOptions, pwmPhase, SIGNAL_HEAD_5_DEF);
-	signalHeadISR_OutputPWM(&signal[6], signalHeadOptions, pwmPhase, SIGNAL_HEAD_6_DEF);
-	signalHeadISR_OutputPWM(&signal[7], signalHeadOptions, pwmPhase, SIGNAL_HEAD_7_DEF);
+	signalHeadISR_OutputPWM(&signal[0], signalHeadOptions[0], pwmPhase, SIGNAL_HEAD_0_DEF);
+	signalHeadISR_OutputPWM(&signal[1], signalHeadOptions[1], pwmPhase, SIGNAL_HEAD_1_DEF);
+	signalHeadISR_OutputPWM(&signal[2], signalHeadOptions[2], pwmPhase, SIGNAL_HEAD_2_DEF);
+	signalHeadISR_OutputPWM(&signal[3], signalHeadOptions[3], pwmPhase, SIGNAL_HEAD_3_DEF);
+	signalHeadISR_OutputPWM(&signal[4], signalHeadOptions[4], pwmPhase, SIGNAL_HEAD_4_DEF);
+	signalHeadISR_OutputPWM(&signal[5], signalHeadOptions[5], pwmPhase, SIGNAL_HEAD_5_DEF);
+	signalHeadISR_OutputPWM(&signal[6], signalHeadOptions[6], pwmPhase, SIGNAL_HEAD_6_DEF);
+	signalHeadISR_OutputPWM(&signal[7], signalHeadOptions[7], pwmPhase, SIGNAL_HEAD_7_DEF);
 
 	// Now do all the counter incrementing and such
 	if (++subMillisCounter >= 4)
@@ -126,7 +137,7 @@ ISR(TIMER0_COMPA_vect)
 		// This runs at 125 frames/second essentially
 
 		for (uint8_t i=0; i<MAX_SIGNAL_HEADS; i++)
-			signalHeadISR_AspectToNextPWM(&signal[i], flasher, signalHeadOptions);
+			signalHeadISR_AspectToNextPWM(&signal[i], flasher, signalHeadOptions[i]);
 	}
 }
 
@@ -155,12 +166,25 @@ void initializeI2C()
 	i2cSlaveInitialize(0x40, false);
 }
 
+void initializeOptions(DebounceState8_t* optionsDebouncer)
+{
+	// Basically the only thing the debouncer cares about is the common anode / common cathode
+	//  sense line that's on PINA:0
+	initDebounceState8(optionsDebouncer, (PINA & 0x01)?OPTION_COMMON_ANODE:0);
+}
+
+void readOptions(DebounceState8_t* optionsDebouncer)
+{
+	debounce8((PINA & 0x01)?OPTION_COMMON_ANODE:0, optionsDebouncer);
+}
+
 int main(void)
 {
 	DebounceState8_t optionsDebouncer;
 	uint32_t lastReadTime = 0;
 	uint32_t currentTime = 0;
 	uint8_t i=0;
+	uint8_t defaultSignalHeadOptions = SIGNAL_OPTION_COMMON_ANODE;
 	// Deal with watchdog first thing
 	MCUSR = 0;              // Clear reset status
 	wdt_reset();            // Reset the WDT, just in case it's still enabled over reset
@@ -207,7 +231,7 @@ int main(void)
 	//  PB0 - Output - A Signal - RED (low=active)
 
 
-	PORTA = 0b00000000;
+	PORTA = 0b00000001;
 	DDRA  = 0b00001110;
 
 	PORTB = 0b00000000;
@@ -220,25 +244,18 @@ int main(void)
 	DDRD  = 0b11111101;
 
 	initializeTimer();
-//	initializeOptions(&optionsDebouncer);
 	initializeI2C();
+	initializeOptions(&optionsDebouncer);
+
+	if (getDebouncedState(&optionsDebouncer) & SENSE_COMMON_ANODE)
+		defaultSignalHeadOptions |= SIGNAL_OPTION_COMMON_ANODE;
 
 	for(i=0; i<MAX_SIGNAL_HEADS; i++)
 	{
 		signalHeadInitialize(&signal[i]);
 		signalHeadAspectSet(&signal[i], ASPECT_OFF);
+		signalHeadOptions[i] = defaultSignalHeadOptions;
 	}
-
-	// Need to set common anode or common cathode
-	// as quickly as possible to prevent an initialization flash
-	// initializeOptions() has already gotten the initial state of the CA/CC line
-/*	optionJumpers = getDebouncedState(&optionsDebouncer);
-	if (optionJumpers & OPTION_COMMON_ANODE)
-		signalHeadOptions |= SIGNAL_OPTION_COMMON_ANODE;
-	else 
-		signalHeadOptions &= ~SIGNAL_OPTION_COMMON_ANODE;*/
-
-	signalHeadOptions |= SIGNAL_OPTION_COMMON_ANODE;
 
 	sei();
 	wdt_reset();
@@ -253,10 +270,47 @@ int main(void)
 
 		if (((uint32_t)currentTime - lastReadTime) > LOOP_UPDATE_TIME_MS && !(i2cBusy()))
 		{
+			bool caSense = false;
 			lastReadTime = currentTime;
+			readOptions(&optionsDebouncer);
+			if (getDebouncedState(&optionsDebouncer) & OPTION_COMMON_ANODE)
+				caSense = true;
 
 			for(i=0; i<MAX_SIGNAL_HEADS; i++)
-				signalHeadAspectSet(&signal[i], i2c_registerMap[i]);
+			{
+				uint8_t optionsReg = i2c_registerMap[I2CREG_OPTIONS_BASE+i];
+				uint8_t optionsTemp = 0;
+				switch(optionsReg & 0xC0)
+				{
+					case OPTION_COMMON_ANODE:
+						optionsTemp |= SIGNAL_OPTION_COMMON_ANODE;
+						break;
+
+					case OPTION_CA_CC_SENSE:
+						optionsTemp |= (caSense)?SIGNAL_OPTION_COMMON_ANODE:0;
+						break;
+
+					case OPTION_COMMON_CATHODE:
+					default:
+						break;
+				}
+
+				switch (optionsReg & 0x07)
+				{
+					case OPTION_SIGNAL_THREE_LIGHT:
+						break;
+
+					case OPTION_SIGNAL_SEARCHLIGHT:
+						optionsTemp |= SIGNAL_OPTION_SEARCHLIGHT;
+						break;
+
+					default:
+						break;
+				}
+
+				signalHeadOptions[i] = optionsTemp;
+				signalHeadAspectSet(&signal[i], i2c_registerMap[I2CREG_ASPECTS_BASE+i]);
+			}
 		}
 	}
 }

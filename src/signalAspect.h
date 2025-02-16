@@ -27,13 +27,13 @@ typedef enum
 {
 	ASPECT_OFF          = 0,
 	ASPECT_GREEN        = 1,
-	ASPECT_YELLOW       = 2,
-	ASPECT_FL_YELLOW    = 3,
-	ASPECT_RED          = 4,
-	ASPECT_FL_GREEN     = 5,
+	ASPECT_FL_GREEN     = 2,
+	ASPECT_YELLOW       = 3,
+	ASPECT_FL_YELLOW    = 4,
+	ASPECT_RED          = 5,
 	ASPECT_FL_RED       = 6,
-	ASPECT_LUNAR        = 7
+	ASPECT_LUNAR        = 7,
+	ASPECT_END
 } SignalAspect_t;
-
 #endif
 
